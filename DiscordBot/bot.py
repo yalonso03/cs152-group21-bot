@@ -8,6 +8,7 @@ import re
 import requests
 from report import Report
 import pdb
+from collections import deque
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -34,6 +35,29 @@ class ModBot(discord.Client):
         self.group_num = None
         self.mod_channels = {} # Map from guild to the mod channel id for that guild
         self.reports = {} # Map from user IDs to the state of their report
+        self.blocklists = {} #create a dict key is blocker id and val is set of offender ids
+        self.report_queue = deque() #first in first out queue of completed reports
+    #record blocker does not want to see the offender, aka adds to blocklists dict
+    async def block_user(self, blocker, offender):    #j
+        self.blocklists.setdefault(blocker.id, set()).add(offender.id)
+    #for enqueing a report for mod review
+    #meta keys: reporter, offender, jump_url, category_code, label
+    async def enqueue_report(self, meta: dict):
+        #adds the report metadata dictionary to the queue.
+        self.report_queue.append(meta)
+        #edge case where the offender is a raw User (not a Member) and has no guild attribute.
+        if hasattr(meta['offender'], "guild") and meta['offender'].guild:
+            guild_id = meta['offender'].guild.id
+        else:
+            guild_id = next(iter(self.mod_channels.keys()))  # fall back to first guild
+        #get the mod channel from server
+        mod_channel = self.mod_channels[guild_id]
+        #sends a notification to the mod channel with the report's summary.
+        await mod_channel.send(
+            f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
+            f"Reporter: {meta['reporter'].mention} | "
+            f"Offender: {meta['offender'].mention}\n{meta['jump_url']}"
+        )
 
     async def on_ready(self):
         print(f'{self.user.name} has connected to Discord! It is these guilds:')
@@ -102,7 +126,10 @@ class ModBot(discord.Client):
         # Only handle messages sent in the "group-#" channel
         if not message.channel.name == f'group-{self.group_num}':
             return
-
+        #hides messages from user that is blocked
+        for offenders in self.blocklists.values():
+            if message.author.id in offenders:
+                return
         # Forward the message to the mod channel
         mod_channel = self.mod_channels[message.guild.id]
         await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
