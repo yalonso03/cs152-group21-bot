@@ -10,6 +10,7 @@ from report import Report
 import pdb
 from collections import deque
 import asyncio
+import heapq
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -40,6 +41,7 @@ class ModBot(discord.Client):
         #! JOEL ADDED HERE
         self.blocklists = {} #create a dict key is blocker id and val is set of offender ids
         self.report_queue = deque() #first in first out queue of completed reports
+        
     #record blocker does not want to see the offender, aka adds to blocklists dict
 
 
@@ -153,121 +155,220 @@ class ModBot(discord.Client):
         scores = self.eval_text(message.content)
         await mod_channel.send(self.code_format(scores))
 
-    # Yasmine added, this gets called when a moderator wants to begin moderating
-    # keys for the report dict are: reporter, offender, jump_url, category_code, label
+    # NEW VERSION!!! yasmine added for the moderator to moderate
+    # literally just tracess thru the flowchart aili made. 
     async def moderate_reports_flow(self, mod_channel):
-        while self.report_queue:
-            report = self.report_queue.popleft() #dequeue from q the next report to moderate
+        def check(m):
+            return m.channel == mod_channel and m.author != self.user
 
-            # info from the report in the queue 
+        while self.report_queue:
+            report = self.report_queue.popleft()
+            #used for the summary at the end (to summarize the report that was just modded)
             reporter = report["reporter"]
             offender = report["offender"]
             message = report["jump_url"]
             category_code = report["category_code"]
             label = report["label"]
 
-            # print this out 
-            report_summary = f"Reviewing report by: {reporter.name}\nAgainst: {offender.name}\nReason: {category_code} - {label}\nMessage info: {message}\n\n"
-
-            # First see if the message should be taken down (idk if this is possible to do, it currently just simulates this by sending the user a DM)
-            await mod_channel.send(
-                report_summary +
-                f'Would you like to take down this message? Please enter yes/no.'
+            report_summary = (
+                f"Reviewing report by: {reporter.name}\n"
+                f"Against: {offender.name}\n"
+                f"Reason: {category_code} - {label}\n"
+                f"Message info: {message}\n"
             )
-            def check(m): return m.channel == mod_channel and m.author != self.user
+
+            moderator_notes = {
+                "offender": offender.name,
+                "reporter": reporter.name,
+                "message_url": message,
+                "violates_guidelines": "no",
+                "reason": None,
+                "message_taken_down": False,
+                "offender_action": "none",
+                "report_sent": False,
+                "report_note": None
+            }
+
+            await mod_channel.send(
+                report_summary + "\nIs this message in violation of any of our community guidelines? (yes/no)"
+            )
+
             try:
                 response = await self.wait_for("message", check=check, timeout=60.0)
             except asyncio.TimeoutError:
-                await mod_channel.send("No response received from moderator. Adding report back into queue and continuing on.")
+                await mod_channel.send("No response. Returning report to queue.")
                 self.report_queue.append(report)
                 continue
 
             if response.content.lower() != "yes":
-                await mod_channel.send("Continuing to the next report...")
-                continue
+                await mod_channel.send("Marking report as resolved.")
+            else:
+                moderator_notes["violates_guidelines"] = "yes"
+                await mod_channel.send("Is the message threatening to share/sharing nude images? (yes/no)")
+                try:
+                    nude_response = await self.wait_for("message", check=check, timeout=60.0)
+                except asyncio.TimeoutError:
+                    await mod_channel.send("No response. Returning report to queue.")
+                    self.report_queue.append(report)
+                    continue
 
-            # have moderator give reason for why message needs to be taken down
-            # these are just the reasons from Aili's flowchart but easy to tweak
-            reasons = {
-                "a": "Promoting Illegal Items",
-                "b": "Spam/Fraud",
-                "c": "Harassment/Hate",
-                "d": "Nudity/Sexual Activity",
-                "e": "Violence/Threats",
-                "f": "Other"
-            }
-            reasons_str = "\n".join([f"{k}) {v}" for k, v in reasons.items()])
-            await mod_channel.send(
-                f"Which reason applies? Please enter a letter:\n{reasons_str}"
-            )
-            try:
-                reason_msg = await self.wait_for("message", check=check, timeout=60.0)
-                reason_code = reason_msg.content.lower()
-                if reason_code == "f":
-                    await mod_channel.send("Please enter a custom explanation:")
-                    custom_msg = await self.wait_for("message", check=check, timeout=60.0)
-                    reason_text = custom_msg.content
-                else:
-                    reason_text = reasons.get(reason_code, "No reason provided.")
-            except asyncio.TimeoutError:
-                await mod_channel.send("No response received. Adding report back to queue and moving to next report.")
-                self.report_queue.append(report)
-                continue
-            try:
-                
-                await offender.send(  # tell the user that their message was taken down (simulate removal, idk if it's possible)
-                    f"Your message was taken down for the following reason:\n{reason_text}"
-                )
-            except discord.Forbidden:
-                await mod_channel.send(f"Could not successfully DM {offender.name}.")
-            except Exception as e:
-                await mod_channel.send(f"An error occurred while DMing {offender.name}: {str(e)}")
-
-            # Step 4: Ask how to deal with the user
-            actions = {
-                "a": "Ban the user",
-                "b": "Suspend the user",
-                "c": "Continue the conversation",
-                "d": "Do nothing"
-            }
-            actions_str = "\n".join([f"{k}) {v}" for k, v in actions.items()])
-            await mod_channel.send(
-                f"How would you like to proceed in dealing with {offender.name}?\n{actions_str}"
-            )
-            try:
-                action_msg = await self.wait_for("message", check=check, timeout=60.0)
-                action_code = action_msg.content.lower()
-                if action_code == "a":
-                    await offender.send("You have been banned for violating our community guidelines.")
-                elif action_code == "b":
-                    await mod_channel.send("Enter the number of weeks that the user should be suspended for:")
-                    duration_msg = await self.wait_for("message", check=check, timeout=60.0)
+                if nude_response.content.lower() == "yes":
+                    await mod_channel.send("Is the message in violation of Federal laws? (yes/no)")
                     try:
-                        duration = int(duration_msg.content)
-                        # tell the user they're suspended for x weeks (mimic suspension w a message)
-                        await offender.send(f"You are suspended for {duration} week(s) due to a violation.")
-                        await mod_channel.send(f"Suspended {offender.name} for {duration} weeks.")
-                    except ValueError:
-                        await mod_channel.send("Invalid duration. Skipping suspension.")
-                elif action_code == "c":
-                    await mod_channel.send("Please DM the reporter to get the necessary information.")
-                elif action_code == "d":
-                    await mod_channel.send("No action taken.")
-            except asyncio.TimeoutError:
-                await mod_channel.send("No response received. Adding user's report back into queue and moving to next report.")
+                        fed_response = await self.wait_for("message", check=check, timeout=60.0)
+                    except asyncio.TimeoutError:
+                        await mod_channel.send("No response. Returning report to queue.")
+                        self.report_queue.append(report)
+                        continue
+
+                    if fed_response.content.lower() == "yes":
+                        await mod_channel.send("This will send a report to the authorities. If you would like to proceed, please add a moderator comment to the report and reply yes. If you would not like to proceed, please reply cancel. (yes/cancel)")
+                        try:
+                            auth_response = await self.wait_for("message", check=check, timeout=60.0)
+                        except asyncio.TimeoutError:
+                            await mod_channel.send("No response. Returning report to queue.")
+                            self.report_queue.append(report)
+                            continue
+
+                        if auth_response.content.lower() == "yes":
+                            await mod_channel.send("Please enter further information to be included in the report to authorities:")
+                            try:
+                                report_note_msg = await self.wait_for("message", check=check, timeout=60.0)
+                                moderator_notes["report_note"] = report_note_msg.content
+                            except asyncio.TimeoutError:
+                                moderator_notes["report_note"] = "No additional comment provided."
+
+                            await mod_channel.send("The report has been sent to the authorities (simulated).")
+                            moderator_notes["report_sent"] = True
+                            try:
+                                await offender.send(f"Your message has been taken down: {message}")
+                                await offender.send("You have been banned.")
+                                moderator_notes["message_taken_down"] = True
+                                moderator_notes["offender_action"] = "banned"
+                            except:
+                                await mod_channel.send(f"Failed to DM {offender.name}.")
+                            goto_end = True
+                        else:
+                            goto_end = await self._takedown_flow(mod_channel, offender, message, check, moderator_notes)
+                    else:
+                        goto_end = await self._takedown_flow(mod_channel, offender, message, check, moderator_notes)
+
+                else:
+                    await mod_channel.send("Which community guideline was violated? Enter letter or 'none':\n"
+                                        "a) Promoting Illegal Items\n"
+                                        "b) Spam/Fraud\n"
+                                        "c) Harassment/Hate\n"
+                                        "d) Nudity/Sexual Activity\n"
+                                        "e) Violence/Threats\n"
+                                        "f) Other\n")
+                    try:
+                        reason_msg = await self.wait_for("message", check=check, timeout=60.0)
+                        if reason_msg.content.lower() == "none":
+                            goto_end = True
+                        elif reason_msg.content.lower() == "f":
+                            await mod_channel.send("Enter custom explanation:")
+                            custom_msg = await self.wait_for("message", check=check, timeout=60.0)
+                            reason_text = custom_msg.content
+                        else:
+                            reasons = {
+                                "a": "Promoting Illegal Items",
+                                "b": "Spam/Fraud",
+                                "c": "Harassment/Hate",
+                                "d": "Nudity/Sexual Activity",
+                                "e": "Violence/Threats",
+                            }
+                            reason_text = reasons.get(reason_msg.content.lower(), "Unknown reason")
+                        moderator_notes["reason"] = reason_text
+
+                        await mod_channel.send("Is the message in violation of Federal laws? (yes/no)")
+                        fed2_msg = await self.wait_for("message", check=check, timeout=60.0)
+                        if fed2_msg.content.lower() == "yes":
+                            await mod_channel.send("This will send a report to the authorities. If you would like to proceed, please add a moderator comment to the report and reply yes. If you would not like to proceed, please reply cancel. (yes/cancel)")
+                            auth2_msg = await self.wait_for("message", check=check, timeout=60.0)
+                            if auth2_msg.content.lower() == "yes":
+                                await mod_channel.send("Please enter further information to be included in the report to authorities:")
+                                try:
+                                    report_note_msg = await self.wait_for("message", check=check, timeout=60.0)
+                                    moderator_notes["report_note"] = report_note_msg.content
+                                except asyncio.TimeoutError:
+                                    moderator_notes["report_note"] = "No additional comment provided."
+
+                                await mod_channel.send("The report has been sent to the authorities (simulated).")
+                                moderator_notes["report_sent"] = True
+                                try:
+                                    await offender.send(f"Your message has been taken down: {message}")
+                                    await offender.send("You have been banned.")
+                                    moderator_notes["message_taken_down"] = True
+                                    moderator_notes["offender_action"] = "banned"
+                                except:
+                                    await mod_channel.send(f"Failed to DM {offender.name}.")
+                                goto_end = True
+                            else:
+                                goto_end = await self._takedown_flow(mod_channel, offender, message, check, moderator_notes)
+                        else:
+                            goto_end = await self._takedown_flow(mod_channel, offender, message, check, moderator_notes)
+                    except asyncio.TimeoutError:
+                        await mod_channel.send("No response. Returning report to queue.")
+                        self.report_queue.append(report)
+                        continue
+
+            if not goto_end:
                 continue
 
-            # give mod an option to stop reviewing reports
-            await mod_channel.send("Would you like to continue moderating more reports? Respond with continue/stop.")
+            summary = (
+                f"Finished moderating! Here is a summary of how you handled this report:\n"
+                f"Message from: {moderator_notes['offender']} to: {moderator_notes['reporter']}\n"
+                f"Violates community guidelines: {moderator_notes['violates_guidelines']}\n"
+                f"Reason: {moderator_notes['reason']}\n"
+                f"Message taken down: {'yes' if moderator_notes['message_taken_down'] else 'no'}\n"
+                f"Action taken: {moderator_notes['offender_action']}\n"
+                f"Report sent to authorities: {'yes' if moderator_notes['report_sent'] else 'no'}\n"
+                f"Moderator comments on report: {moderator_notes['report_note']}\n"
+            )
+            await mod_channel.send(summary)
+
+            await mod_channel.send("Continue moderating more reports? (yes/no)")
             try:
                 cont_msg = await self.wait_for("message", check=check, timeout=60.0)
-                if cont_msg.content.lower() == "stop":
-                    await mod_channel.send("Moderation session ended.")
-                    return
+                if cont_msg.content.lower() != "yes":
+                    break
             except asyncio.TimeoutError:
-                await mod_channel.send("No response received. Ending session.")
-                return
-        await mod_channel.send("No more user reports to moderate.")
+                await mod_channel.send("No response. Ending session.")
+                break
+
+        await mod_channel.send("All done moderating! Thank you for helping keep our community safe.")
+
+
+    async def _takedown_flow(self, mod_channel, offender, message, check, moderator_notes):
+        try:
+            await offender.send(f"Your message has been taken down: {message}")
+            moderator_notes["message_taken_down"] = True
+        except:
+            await mod_channel.send(f"Failed to DM {offender.name} about takedown.")
+
+        await mod_channel.send("What actions should we take against this user?\n"
+                            "a) Permanently ban\n"
+                            "b) Suspend for 1 week\n"
+                            "c) Mute account for 1 day\n"
+                            "d) No further action")
+        try:
+            action_msg = await self.wait_for("message", check=check, timeout=60.0)
+            action = action_msg.content.lower()
+            if action == "a":
+                await offender.send("You have been permanently banned.")
+                moderator_notes["offender_action"] = "banned"
+            elif action == "b":
+                await offender.send("Your account has been suspended for one week.")
+                moderator_notes["offender_action"] = "suspended"
+            elif action == "c":
+                await offender.send("Your account has been muted for one day.")
+                moderator_notes["offender_action"] = "muted"
+            elif action == "d":
+                moderator_notes["offender_action"] = "none"
+        except asyncio.TimeoutError:
+            await mod_channel.send("No action selected. Proceeding.")
+
+        return True
 
 
 

@@ -1,0 +1,56 @@
+create some structure of past moderated items for reports that violate guidelines
+
+When the moderator sends some message like “Moderate” then the following will happen:
+While the report queue is not empty:
+	Print out a summary of the report in the format that my current version already does (reported by: against: abuse type:)
+	Ask if the message is in violation of any of our community guidelines
+	If message violates guidelines:
+		Ask if the message is threatening to share/sharing nude images?
+		If it is threatening to share:
+			Ask if the message is in violation of Federal laws?
+			If in violation of federal laws:
+				Ask: are you ready to move forward with sending a report to the authorities? Reply with yes/cancel
+				If yes, wanting to report:
+					Simulate reporting by saying in mod channel: “Report sent”
+					Simulate removing the offender user’s message by DMing the offender that their message (with message linked) has been taken down)
+					Simulate banning the offender user by DMing the offender saying that they have been banned 
+					GoTo END OF LOOP
+                If cancel:
+                    GoTo TAKEDOWN
+		
+		Else (If it isn’t threatening to share/sharing nude images):
+			Ask which of the following guidelines are in violation (TODO add in violations)
+            If the moderator selects None, GoTo END OF LOOP
+            Ask if the message is in violation of Federal laws?
+			    If in violation of federal laws:
+                Ask: are you ready to move forward with sending a report to the authorities? Reply with yes/cancel
+				If yes, wanting to report:
+					Simulate reporting by saying in mod channel: “Report sent”
+					Simulate removing the offender user’s message by DMing the offender that their message (with message linked) has been taken down)
+					Simulate banning the offender user by DMing the offender saying that they have been banned 
+					GoTo END OF LOOP
+                If cancel:
+                    GoTo TAKEDOWN
+
+
+        
+        TAKEDOWN:
+        Simulate removing the offender user’s message by DMing the offender that their message (with message linked) has been taken down)
+        Ask: what actions, if any, should we take against this user? Options: a) permanently ban, b) suspend for 1 wk, c) mute account for 1 day, d) No further action
+        Case a: simulate by DMing the offender "you've been banned permanently."
+        Case b: Simulate by DMing the offender "your account has been suspended for one week."
+        Case c: Simulate by DMing the offender "your account has been muted for one day".
+        Case d: Nothing
+        GoTo END OF LOOP 
+
+	Else (if message doesn't violate guidelines):
+        Say: Marking report as resolved.
+        GoTo END OF LOOP
+	
+	
+	END OF LOOP:
+	Ask if moderator would like to continue going through reports? 
+	If no:
+		Break out of loop
+
+Say: All done moderating! Thank you for helping keep our community safe.
