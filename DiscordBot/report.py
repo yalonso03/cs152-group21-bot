@@ -6,6 +6,8 @@ import re
 
 #make a category tree that has all the options a user can choose from
 #and include the children of each parent
+
+# category codes that potentially contain sextortion: 4b 4d 5a 5b 5c 6d
 OPTIONS_TREE = {
     #first in dict is if user does not like post
     "1": {"label": "I don’t like it", "children": {}},

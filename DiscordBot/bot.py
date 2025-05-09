@@ -12,6 +12,9 @@ from collections import deque
 import asyncio
 import heapq
 
+
+
+
 # Set up logging to the console
 logger = logging.getLogger('discord')
 logger.setLevel(logging.DEBUG)
@@ -40,7 +43,14 @@ class ModBot(discord.Client):
 
         #! JOEL ADDED HERE
         self.blocklists = {} #create a dict key is blocker id and val is set of offender ids
-        self.report_queue = deque() #first in first out queue of completed reports
+        #self.report_queue = deque() #first in first out queue of completed reports
+        self.report_queue = []
+        heapq.heapify(self.report_queue)# Yasmine changed this to a heapq so we could do priority queue
+        
+        self.potentially_contain_sextortion_codes = ["4b", "4d", "5a", "5b", "5c", "6d"]  # values in the OPTIONS dict in report.py that should be prioritized
+        # priority values 
+        self.SEXTORTION_PRIORITY = 1  # for reports that potentially have sextortion
+        self.OTHER_PRIORITY = 2       # for reports that likely were not because of sextortion
         
     #record blocker does not want to see the offender, aka adds to blocklists dict
 
@@ -52,7 +62,16 @@ class ModBot(discord.Client):
     #meta keys: reporter, offender, jump_url, category_code, label
     async def enqueue_report(self, meta: dict):
         #adds the report metadata dictionary to the queue.
-        self.report_queue.append(meta)
+
+        # If the category code that the user selected is one of the ones that we've flagged for likely being 
+        # related to sextortion, we're gonna push it with priority SEXTORTION_PRIORITY to prioritize it
+        priority_val = self.SEXTORTION_PRIORITY if meta['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
+        #self.report_queue.append(meta)
+        print("Priority value is: ", priority_val)
+        print("meta is:", meta)
+        print("queue is;", self.report_queue)
+        heapq.heappush(self.report_queue, (priority_val, meta))  # changed to push with correct priority value 
+
         #edge case where the offender is a raw User (not a Member) and has no guild attribute.
         if hasattr(meta['offender'], "guild") and meta['offender'].guild:
             guild_id = meta['offender'].guild.id
@@ -162,7 +181,9 @@ class ModBot(discord.Client):
             return m.channel == mod_channel and m.author != self.user
 
         while self.report_queue:
-            report = self.report_queue.popleft()
+            #report_tup = self.report_queue.popleft()
+            priority, report = heapq.heappop(self.report_queue)
+            #report = report_tup[1]  # added this cuz the report is now a tuple
             #used for the summary at the end (to summarize the report that was just modded)
             reporter = report["reporter"]
             offender = report["offender"]
@@ -197,7 +218,9 @@ class ModBot(discord.Client):
                 response = await self.wait_for("message", check=check, timeout=60.0)
             except asyncio.TimeoutError:
                 await mod_channel.send("No response. Returning report to queue.")
-                self.report_queue.append(report)
+                #self.report_queue.append(report)
+                priority_val = self.SEXTORTION_PRIORITY if report['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
+                heapq.heappush(self.report_queue, (priority_val, report))
                 continue
 
             if response.content.lower() != "yes":
@@ -218,7 +241,9 @@ class ModBot(discord.Client):
                         fed_response = await self.wait_for("message", check=check, timeout=60.0)
                     except asyncio.TimeoutError:
                         await mod_channel.send("No response. Returning report to queue.")
-                        self.report_queue.append(report)
+                        #self.report_queue.append(report)
+                        priority_val = self.SEXTORTION_PRIORITY if report['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
+                        heapq.heappush(self.report_queue, (priority_val, report))
                         continue
 
                     if fed_response.content.lower() == "yes":
@@ -227,7 +252,9 @@ class ModBot(discord.Client):
                             auth_response = await self.wait_for("message", check=check, timeout=60.0)
                         except asyncio.TimeoutError:
                             await mod_channel.send("No response. Returning report to queue.")
-                            self.report_queue.append(report)
+                            # self.report_queue.append(report)
+                            priority_val = self.SEXTORTION_PRIORITY if report['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
+                            heapq.heappush(self.report_queue, (priority_val, report))
                             continue
 
                         if auth_response.content.lower() == "yes":
@@ -309,7 +336,9 @@ class ModBot(discord.Client):
                             goto_end = await self._takedown_flow(mod_channel, offender, message, check, moderator_notes)
                     except asyncio.TimeoutError:
                         await mod_channel.send("No response. Returning report to queue.")
-                        self.report_queue.append(report)
+                        #self.report_queue.append(report)
+                        priority_val = self.SEXTORTION_PRIORITY if report['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
+                        heapq.heappush(self.report_queue, (priority_val, report))
                         continue
 
             if not goto_end:
