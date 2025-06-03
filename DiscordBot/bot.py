@@ -34,6 +34,26 @@ with open(token_path) as f:
     discord_token = tokens['discord']
 
 
+async def fetch_message_object_from_url(bot: discord.Client, jump_url: str) -> discord.Message:
+        """
+        Given a Discord message URL, fetch and return the corresponding discord.Message object.
+        """
+        match = re.search(r"/channels/(\d+)/(\d+)/(\d+)", jump_url)
+        if not match:
+            raise ValueError(f"Invalid Discord message URL format: {jump_url}")
+
+        guild_id = int(match.group(1))
+        channel_id = int(match.group(2))
+        message_id = int(match.group(3))
+
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            channel = await bot.fetch_channel(channel_id)
+
+        return await channel.fetch_message(message_id)
+
+
+
 class ModBot(discord.Client):
     def __init__(self): 
         intents = discord.Intents.default()
@@ -183,7 +203,7 @@ class ModBot(discord.Client):
     async def moderate_reports_flow(self, mod_channel):
         def check(m):
             return m.channel == mod_channel and m.author != self.user
-
+        goto_end = False
         while self.report_queue:
             #report_tup = self.report_queue.popleft()
             priority, time, report = heapq.heappop(self.report_queue)
@@ -192,6 +212,7 @@ class ModBot(discord.Client):
             reporter = report["reporter"]
             offender = report["offender"]
             message = report["jump_url"]
+            print("JUMPURL Is: ", message)
             category_code = report["category_code"]
             label = report["label"]
 
@@ -275,7 +296,16 @@ class ModBot(discord.Client):
                             await mod_channel.send("The report has been sent to the authorities (simulated).")
                             moderator_notes["report_sent"] = True
                             try:
-                                await offender.send(f"Your message has been taken down: {message}")
+                                #await offender.send(f"Your message has been taken down: {message}")
+
+                                # delete the message by getting the message object
+                                
+                                message_obj = await fetch_message_object_from_url(self, message)
+                                print("MESSAGE IS: ", message)
+                                await message_obj.delete()
+                                await offender.send(f"Your message has been taken down: {message_obj.content}")
+
+
                                 await offender.send("You have been banned.")
                                 moderator_notes["message_taken_down"] = True
                                 moderator_notes["offender_action"] = "banned"
@@ -330,7 +360,15 @@ class ModBot(discord.Client):
                                 await mod_channel.send("The report has been sent to the authorities (simulated).")
                                 moderator_notes["report_sent"] = True
                                 try:
-                                    await offender.send(f"Your message has been taken down: {message}")
+                                    # delete the message by getting the message object
+                                
+                                    message_obj = await fetch_message_object_from_url(self, message)
+                                    print("MESSAGE IS: ", message)
+                                    await message_obj.delete()
+                                    await offender.send(f"Your message has been taken down: {message_obj.content}")
+                    
+
+
                                     await offender.send("You have been banned.")
                                     moderator_notes["message_taken_down"] = True
                                     moderator_notes["offender_action"] = "banned"
@@ -378,7 +416,10 @@ class ModBot(discord.Client):
 
     async def _takedown_flow(self, mod_channel, offender, message, check, moderator_notes):
         try:
-            await offender.send(f"Your message has been taken down: {message}")
+            message_obj = await fetch_message_object_from_url(self, message)
+            print("MESSAGE IS: ", message)
+            await message_obj.delete()
+            await offender.send(f"Your message has been taken down: {message_obj.content}")
             moderator_notes["message_taken_down"] = True
         except:
             await mod_channel.send(f"Failed to DM {offender.name} about takedown.")
