@@ -12,10 +12,38 @@ from collections import deque
 import asyncio
 import heapq
 import itertools
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 
+LLM_PROMPT = """You are an assistant helping detect cases of sextortion on Discord. 
 
+Sextortion is defined as the practice of extorting money or sexual favors from someone by threatening to reveal evidence of their sexual activity. You will be given a message or conversation, and your task is to analyze whether it includes signs of sextortion or related risks.
+
+Please respond ONLY with a JSON object in the following format:
+
+{
+  "should_flag_for_mod_review": False,
+  "contains_sextortion": False,
+  "resources_needed": {
+    "need_suicide_hotline": False,
+    "need_911": False,
+    "need_mental_health_hotline": False
+  }
+}
+
+Update the values (`true` or `false`) based on the content you analyze.
+
+Now analyze the following content:
+"""
+
+# my api key
+#openai.api_key = os.environ["OPENAI_API_KEY"]
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -23,6 +51,8 @@ logger.setLevel(logging.DEBUG)
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(handler)
+#client = OpenAI()  # added for milestone 3
+
 
 # There should be a file called 'tokens.json' inside the same folder as this file
 token_path = 'tokens.json'
@@ -38,6 +68,7 @@ async def fetch_message_object_from_url(bot: discord.Client, jump_url: str) -> d
         """
         Given a Discord message URL, fetch and return the corresponding discord.Message object.
         """
+
         match = re.search(r"/channels/(\d+)/(\d+)/(\d+)", jump_url)
         if not match:
             raise ValueError(f"Invalid Discord message URL format: {jump_url}")
@@ -77,6 +108,67 @@ class ModBot(discord.Client):
         
     #record blocker does not want to see the offender, aka adds to blocklists dict
 
+    def process_message(self, message_string):
+        """
+        This function queries OPEN AI
+        """
+        print("calling process_message")
+        #TODO uncomment this once sure that the automatic flagging is working
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4-1106-preview",  # or "gpt-4o" if you prefer
+            messages=[
+                {"role": "system", "content": "Respond only with a JSON object like: {\"answer\": true} or {\"answer\": false}."},
+                {"role": "user", "content": LLM_PROMPT + message_string}
+            ],
+            temperature=0,
+            max_tokens=100,
+            #response_format="json"  # ensures structured JSON response
+            response_format={"type": "json_object"}
+        )
+        # response = client.responses.create(
+        #     model="gpt-4.1",
+        #     #input=["Is water wet? Respond only with a JSON object like: {\"answer\": true} or {\"answer\": false}."],
+        #     input = LLM_PROMPT + message_string,
+        #     text={
+        #         "format": {
+        #         "type": "json"
+        #         }
+        #     },
+        #     temperature=0,
+        #     max_output_tokens=100
+        # )
+        """
+        {
+            "should_flag_for_mod_review": false,
+            "contains_sextortion": false,
+            "resources_needed": {
+                "need_suicide_hotline": false,
+                "need_911": false,
+                "need_mental_health_hotline": false
+            }
+        }
+
+        """
+        # 
+
+        #output_json = response.output_text
+        evaluation_json = response.choices[0].message.content
+        evaluation_dict = json.loads(evaluation_json)
+        #TODO remove this later
+        # output_json = {
+        #     "should_flag_for_mod_review": True,
+        #     "contains_sextortion": False,
+        #     "resources_needed": {
+        #         "need_suicide_hotline": False,
+        #         "need_911": False,
+        #         "need_mental_health_hotline": False
+        #     }
+        # }
+
+        print("**** OUTPUT JSON IS:", evaluation_dict)
+        return evaluation_dict
+
 
     async def block_user(self, blocker, offender):    #j
         self.blocklists.setdefault(blocker.id, set()).add(offender.id)
@@ -86,29 +178,81 @@ class ModBot(discord.Client):
     async def enqueue_report(self, meta: dict):
         #adds the report metadata dictionary to the queue.
 
-        # If the category code that the user selected is one of the ones that we've flagged for likely being 
-        # related to sextortion, we're gonna push it with priority SEXTORTION_PRIORITY to prioritize it
-        priority_val = self.SEXTORTION_PRIORITY if meta['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
-        #self.report_queue.append(meta)
-        print("Priority value is: ", priority_val)
-        print("meta is:", meta)
-        print("queue is;", self.report_queue)
-        heapq.heappush(self.report_queue, (priority_val, next(self.counter), meta))
-        #heapq.heappush(self.report_queue, (priority_val, meta))  # changed to push with correct priority value 
+        # Case where this was an automated report -- gets handled a little differently than a manually reported one.
+        if "automated_report" in meta:
+            # IF the report was generated automatically 
+            eval_json = meta["evaluation_json"]
 
-        #edge case where the offender is a raw User (not a Member) and has no guild attribute.
-        if hasattr(meta['offender'], "guild") and meta['offender'].guild:
-            guild_id = meta['offender'].guild.id
+            priority_val = self.SEXTORTION_PRIORITY if eval_json["contains_sextortion"] else self.OTHER_PRIORITY
+
+            #ENQUEUE REPORT
+            heapq.heappush(self.report_queue, (priority_val, next(self.counter), meta))
+            #edge case where the offender is a raw User (not a Member) and has no guild attribute.
+            if hasattr(meta['offender'], "guild") and meta['offender'].guild:
+                guild_id = meta['offender'].guild.id
+            else:
+                guild_id = next(iter(self.mod_channels.keys()))  # fall back to first guild
+            #get the mod channel from server
+            mod_channel = self.mod_channels[guild_id]
+            #sends a notification to the mod channel with the report's summary.
+
+            reporter_mention = (
+                meta["reporter"].mention if "reporter" in meta and hasattr(meta["reporter"], "mention")
+                else "Automated Bot"
+            )
+            offender_mention = (
+                meta["offender"].mention if hasattr(meta["offender"], "mention")
+                else str(meta["offender"])
+            )
+            # reporter_mention = meta["reporter"].mention if hasattr(meta["reporter"], "mention") else str(meta["reporter"])
+            # offender_mention = meta["offender"].mention if hasattr(meta["offender"], "mention") else str(meta["offender"])
+            await mod_channel.send(
+                f"New **AUTOMATED Queued report**\n"
+                f"Reporter: {reporter_mention} | Offender: {offender_mention}\n{meta['jump_url']}"
+)           
+            # await mod_channel.send(
+            #     f"New **AUTOMATED Queued report**\n"
+            #     f"Offender: {meta['offender']}\n{meta['jump_url']}"
+            # )
+
         else:
-            guild_id = next(iter(self.mod_channels.keys()))  # fall back to first guild
-        #get the mod channel from server
-        mod_channel = self.mod_channels[guild_id]
-        #sends a notification to the mod channel with the report's summary.
-        await mod_channel.send(
-            f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
-            f"Reporter: {meta['reporter'].mention} | "
-            f"Offender: {meta['offender'].mention}\n{meta['jump_url']}"
-        )
+            # If the category code that the user selected is one of the ones that we've flagged for likely being 
+            # related to sextortion, we're gonna push it with priority SEXTORTION_PRIORITY to prioritize it
+            priority_val = self.SEXTORTION_PRIORITY if meta['category_code'] in self.potentially_contain_sextortion_codes else self.OTHER_PRIORITY
+            heapq.heappush(self.report_queue, (priority_val, next(self.counter), meta))
+
+            #edge case where the offender is a raw User (not a Member) and has no guild attribute.
+            if hasattr(meta['offender'], "guild") and meta['offender'].guild:
+                guild_id = meta['offender'].guild.id
+            else:
+                guild_id = next(iter(self.mod_channels.keys()))  # fall back to first guild
+            #get the mod channel from server
+            mod_channel = self.mod_channels[guild_id]
+            #sends a notification to the mod channel with the report's summary.
+            # reporter_mention = meta["reporter"].mention if hasattr(meta["reporter"], "mention") else str(meta["reporter"])
+            # offender_mention = meta["offender"].mention if hasattr(meta["offender"], "mention") else str(meta["offender"])
+            reporter_mention = (
+                meta["reporter"].mention if "reporter" in meta and hasattr(meta["reporter"], "mention")
+                else "Automated Bot"
+            )
+            offender_mention = (
+                meta["offender"].mention if hasattr(meta["offender"], "mention")
+                else str(meta["offender"])
+)           
+
+            await mod_channel.send(
+                f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
+                f"Reporter: {reporter_mention} | Offender: {offender_mention}\n{meta['jump_url']}"
+            )
+            # await mod_channel.send(
+            #     f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
+            #     f"Reporter: {reporter_mention} | Offender: {offender_mention}\n{meta['jump_url']}"
+            # )
+            # await mod_channel.send(
+            #     f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
+            #     f"Reporter: {meta['reporter'].mention} | "
+            #     f"Offender: {meta['offender'].mention}\n{meta['jump_url']}"
+            # )
     #! JOEL ADDED end 
 
     async def on_ready(self):
@@ -118,7 +262,12 @@ class ModBot(discord.Client):
         print('Press Ctrl-C to quit.')
 
         # Parse the group number out of the bot's name
-        match = re.search('[gG]roup (\d+) [bB]ot', self.user.name)
+        match = re.search(r'[gG]roup (\d+) [bB]ot', self.user.name)
+        # match = re.search('[gG]roup (\d+) [bB]ot', self.user.name)  JUST CHANGED THIS 6/4
+
+
+
+
         if match:
             self.group_num = match.group(1)
         else:
@@ -192,6 +341,98 @@ class ModBot(discord.Client):
         for offenders in self.blocklists.values():
             if message.author.id in offenders:
                 return
+
+        # -------------------
+        # Automated detection portion
+
+        # This is the format of the evaluation json dictionary
+        """
+        {
+            "should_flag_for_mod_review": false,
+            "contains_sextortion": false,
+            "resources_needed": {
+                "need_suicide_hotline": false,
+                "need_911": false,
+                "need_mental_health_hotline": false
+            }
+        }
+        """
+        # Evaluate the message with OpenAI API call
+        # print("calling process message from handle channel message")
+        evaluation_json = self.process_message(message.content)
+    
+        
+        # If API call determined that this should be flagged for mod review, enqueue it automatically
+        if evaluation_json["should_flag_for_mod_review"]:
+            # print("in if statement -- message should be flagged for mod review")
+
+            report_dict = {
+                "automated_report": True,
+                "evaluation_json": evaluation_json,
+                "reporter": None,
+                "offender": message.author,
+                "jump_url": message.jump_url,
+                "category_code": "n/a",
+                "label": "Automated Report"
+            }
+            await self.enqueue_report(report_dict)
+
+
+
+            # report_dict = {
+            #     #! These first 2 keys only exist for the automated reports
+            #     "automated_report" : True,  # To denote that this was an automated one, this is not a key in the meta dict in non-automated cases
+            #     "evaluation_json" : evaluation_json,  # WILL ONLY EXIST IF AUTOMATED REPORT
+
+            #     #! These remaining keys exist for all report types
+            #     "reporter": "Automated Bot Report",
+            #     "offender": message.author.id,
+            #     "jump_url": message.jump_url,
+            #     "category_code": "n/a",
+            #     "label": "Automated Report"
+            # }
+            # print("calling enqueue report from handle channel message")
+            # await self.enqueue_report(report_dict)
+            print("report should have been enqueued")
+            # Then provide the necessary resources
+            resources_dict = evaluation_json["resources_needed"]
+            need_suicide_hotline = resources_dict["need_suicide_hotline"]
+            need_911 = resources_dict["need_911"]
+            need_mental_health_hotline = resources_dict["need_mental_health_hotline"]
+
+            print(f"Providing resources for suicide? {need_suicide_hotline}")
+            print(f"Providing resources for 911? {need_911}")
+            print(f"Providing resources for mental health? {need_mental_health_hotline}")
+            
+            #TODO 
+            if need_mental_health_hotline or need_911 or need_suicide_hotline:
+                #!TODO SEND A MESSAGE BEING LIKE U MIGHT NEED RESOURCES.
+                pass
+            
+            if need_suicide_hotline:
+                #!TODO
+                pass
+            if need_911:
+                #!TODO
+                pass
+            if need_mental_health_hotline:
+                #!TODO
+                pass
+
+
+        """
+        this is what the report dict shoudl look like 
+        {
+                "reporter":      self.reporter, #captures who submitted the report
+                "offender":      self.message.author, #captures the identity of the person who sent reported msg
+                "jump_url":      self.message.jump_url, #has link to msg that was reported
+                "category_code": self.category_code, #gives info about the category and subcategory chosen
+                "label":         self.label_for_code(self.category_code) #generate a label for code
+            }
+
+        """
+    
+
         # Forward the message to the mod channel
         mod_channel = self.mod_channels[message.guild.id]
         await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
@@ -209,23 +450,35 @@ class ModBot(discord.Client):
             priority, time, report = heapq.heappop(self.report_queue)
             #report = report_tup[1]  # added this cuz the report is now a tuple
             #used for the summary at the end (to summarize the report that was just modded)
-            reporter = report["reporter"]
+            #reporter = report["reporter"]  replaced below vvvv
+
+            reporter = report.get("reporter")  # could be None
+            reporter_name = reporter.name if reporter and hasattr(reporter, "name") else "Automated Bot"
+
+
             offender = report["offender"]
             message = report["jump_url"]
-            print("JUMPURL Is: ", message)
             category_code = report["category_code"]
             label = report["label"]
 
+
             report_summary = (
-                f"Reviewing report by: {reporter.name}\n"
+                f"Reviewing report by: {reporter_name}\n"
                 f"Against: {offender.name}\n"
                 f"Reason: {category_code} - {label}\n"
                 f"Message info: {message}\n"
             )
+            # report_summary = ( REPLACED ABOVE
+            #     f"Reviewing report by: {reporter.name}\n"
+            #     f"Against: {offender.name}\n"
+            #     f"Reason: {category_code} - {label}\n"
+            #     f"Message info: {message}\n"
+            # )
 
             moderator_notes = {
                 "offender": offender.name,
-                "reporter": reporter.name,
+                "reporter": reporter.name if reporter and hasattr(reporter, "name") else "Automated Bot",  # REPLACED
+                # "reporter": reporter.name,
                 "message_url": message,
                 "violates_guidelines": "no",
                 "reason": None,
@@ -301,7 +554,6 @@ class ModBot(discord.Client):
                                 # delete the message by getting the message object
                                 
                                 message_obj = await fetch_message_object_from_url(self, message)
-                                print("MESSAGE IS: ", message)
                                 await message_obj.delete()
                                 await offender.send(f"Your message has been taken down: {message_obj.content}")
 
@@ -363,7 +615,6 @@ class ModBot(discord.Client):
                                     # delete the message by getting the message object
                                 
                                     message_obj = await fetch_message_object_from_url(self, message)
-                                    print("MESSAGE IS: ", message)
                                     await message_obj.delete()
                                     await offender.send(f"Your message has been taken down: {message_obj.content}")
                     
@@ -417,7 +668,6 @@ class ModBot(discord.Client):
     async def _takedown_flow(self, mod_channel, offender, message, check, moderator_notes):
         try:
             message_obj = await fetch_message_object_from_url(self, message)
-            print("MESSAGE IS: ", message)
             await message_obj.delete()
             await offender.send(f"Your message has been taken down: {message_obj.content}")
             moderator_notes["message_taken_down"] = True
