@@ -14,11 +14,17 @@ import heapq
 import itertools
 from openai import OpenAI
 from dotenv import load_dotenv
+from discord import Embed
 
 load_dotenv()
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+
+NEED_SUICIDE_HOTLINE = "need_suicide_hotline"
+NEED_911 = "need_911"
+NEED_MENTAL_HEALTH_HOTLINE = "need_mental_health_hotline"
+NEED_NONCON_PORNOGRAPHY_HOTLINE = "need_nonconsensual_pornography_hotline"
 
 
 LLM_PROMPT = """You are an assistant helping detect cases of sextortion on Discord. 
@@ -33,7 +39,8 @@ Please respond ONLY with a JSON object in the following format:
   "resources_needed": {
     "need_suicide_hotline": False,
     "need_911": False,
-    "need_mental_health_hotline": False
+    "need_mental_health_hotline": False,
+    "need_nonconsensual_pornography_hotline" : False,
   }
 }
 
@@ -42,8 +49,26 @@ Update the values (`true` or `false`) based on the content you analyze.
 Now analyze the following content:
 """
 
-# my api key
-#openai.api_key = os.environ["OPENAI_API_KEY"]
+
+RESOURCES_DICT = {
+    NEED_NONCON_PORNOGRAPHY_HOTLINE : {
+        "url" : "https://cybercivilrights.org/ccri-crisis-helpline/",
+        "text" : "The CCRI Crisis Hotline for Nonconsensual Pornography"
+    },
+    NEED_911 : {
+        "url" : "https://www.911.gov/",
+        "text" : "911 for Emergencies"
+    },
+    NEED_MENTAL_HEALTH_HOTLINE : {
+        "url" : "https://mentalhealthhotline.org/",
+        "text" : "National Mental Health Hotline"
+    },
+    NEED_SUICIDE_HOTLINE : {
+        "url" : "https://988lifeline.org/chat/",
+        "text" : "Suicide Crisis Hotline"
+    }
+
+}
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -112,8 +137,6 @@ class ModBot(discord.Client):
         """
         This function queries OPEN AI
         """
-        print("calling process_message")
-        #TODO uncomment this once sure that the automatic flagging is working
 
         response = openai_client.chat.completions.create(
             model="gpt-4-1106-preview",  # or "gpt-4o" if you prefer
@@ -126,18 +149,7 @@ class ModBot(discord.Client):
             #response_format="json"  # ensures structured JSON response
             response_format={"type": "json_object"}
         )
-        # response = client.responses.create(
-        #     model="gpt-4.1",
-        #     #input=["Is water wet? Respond only with a JSON object like: {\"answer\": true} or {\"answer\": false}."],
-        #     input = LLM_PROMPT + message_string,
-        #     text={
-        #         "format": {
-        #         "type": "json"
-        #         }
-        #     },
-        #     temperature=0,
-        #     max_output_tokens=100
-        # )
+       
         """
         {
             "should_flag_for_mod_review": false,
@@ -155,18 +167,8 @@ class ModBot(discord.Client):
         #output_json = response.output_text
         evaluation_json = response.choices[0].message.content
         evaluation_dict = json.loads(evaluation_json)
-        #TODO remove this later
-        # output_json = {
-        #     "should_flag_for_mod_review": True,
-        #     "contains_sextortion": False,
-        #     "resources_needed": {
-        #         "need_suicide_hotline": False,
-        #         "need_911": False,
-        #         "need_mental_health_hotline": False
-        #     }
-        # }
+        
 
-        print("**** OUTPUT JSON IS:", evaluation_dict)
         return evaluation_dict
 
 
@@ -377,47 +379,32 @@ class ModBot(discord.Client):
             }
             await self.enqueue_report(report_dict)
 
-
-
-            # report_dict = {
-            #     #! These first 2 keys only exist for the automated reports
-            #     "automated_report" : True,  # To denote that this was an automated one, this is not a key in the meta dict in non-automated cases
-            #     "evaluation_json" : evaluation_json,  # WILL ONLY EXIST IF AUTOMATED REPORT
-
-            #     #! These remaining keys exist for all report types
-            #     "reporter": "Automated Bot Report",
-            #     "offender": message.author.id,
-            #     "jump_url": message.jump_url,
-            #     "category_code": "n/a",
-            #     "label": "Automated Report"
-            # }
-            # print("calling enqueue report from handle channel message")
-            # await self.enqueue_report(report_dict)
-            print("report should have been enqueued")
             # Then provide the necessary resources
             resources_dict = evaluation_json["resources_needed"]
-            need_suicide_hotline = resources_dict["need_suicide_hotline"]
-            need_911 = resources_dict["need_911"]
-            need_mental_health_hotline = resources_dict["need_mental_health_hotline"]
+            need_suicide_hotline = resources_dict[NEED_SUICIDE_HOTLINE]
+            need_911 = resources_dict[NEED_911]
+            need_mental_health_hotline = resources_dict[NEED_MENTAL_HEALTH_HOTLINE]
+            need_noncon_porn_hotline = resources_dict[NEED_NONCON_PORNOGRAPHY_HOTLINE]
 
-            print(f"Providing resources for suicide? {need_suicide_hotline}")
-            print(f"Providing resources for 911? {need_911}")
-            print(f"Providing resources for mental health? {need_mental_health_hotline}")
+        
             
-            #TODO 
-            if need_mental_health_hotline or need_911 or need_suicide_hotline:
+            n_resources_needed = sum([1 if resources_dict[pot_resource] else 0 for pot_resource in resources_dict.keys()])
+            if n_resources_needed > 0:  # if there's at least one resource that needs to be given
                 #!TODO SEND A MESSAGE BEING LIKE U MIGHT NEED RESOURCES.
-                pass
-            
-            if need_suicide_hotline:
-                #!TODO
-                pass
-            if need_911:
-                #!TODO
-                pass
-            if need_mental_health_hotline:
-                #!TODO
-                pass
+                await message.channel.send("**This message was flagged as likely causing harm. It will be reviewed by a moderator and dealt with ASAP. In the meantime, please feel free to reference the below resources.**")
+                for pot_resource in resources_dict.keys():
+                    if resources_dict[pot_resource]:
+                        # then need to provide this resource
+                        res = RESOURCES_DICT[pot_resource]
+                        embed = Embed(
+                            title=res["text"],
+                            url=res["url"],
+                            description="Please click to access this resource.",
+                            color=0xff5555  # red-ish
+                        )
+                        await message.channel.send(embed=embed)
+
+
 
 
         """
@@ -527,7 +514,7 @@ class ModBot(discord.Client):
                         continue
 
                     if fed_response.content.lower() == "yes":
-                        await mod_channel.send("This will send a report to the authorities. If you would like to proceed, please add a moderator comment to the report and reply yes. If you would not like to proceed, please reply cancel. (yes/cancel)")
+                        await mod_channel.send("This will send a report to the authorities. If you would like to proceed with submitting a report, reply yes (and you will be further prompted to submit information for the report). If you would not like to proceed, please reply cancel. (yes/cancel)")
                         try:
                             auth_response = await self.wait_for("message", check=check, timeout=60.0)
                         except asyncio.TimeoutError:
@@ -652,6 +639,29 @@ class ModBot(discord.Client):
                 f"Moderator comments on report: {moderator_notes['report_note']}\n"
             )
             await mod_channel.send(summary)
+
+            ####
+            # This is for sending another response back to the user who submitted a manual report
+            if reporter and reporter.name != "Automated Bot":
+                try:
+                    dm_summary = (
+                        f"**Thank you for your report against {moderator_notes['offender']} earlier.**\n"
+                        f"We're following up to notify you of how we proceeded with the report:\n"
+                        f"      ----------------------------------------------------------------------------------------\n"
+                        f"      Violates community guidelines: {moderator_notes['violates_guidelines']}\n"
+                        f"      Reason: {moderator_notes['reason'] or 'N/A'}\n"
+                        f"      Message taken down: {'yes' if moderator_notes['message_taken_down'] else 'no'}\n"
+                        f"      Action taken: {moderator_notes['offender_action']}\n"
+                        f"      Report sent to authorities: {'yes' if moderator_notes['report_sent'] else 'no'}\n"
+                        f"      ----------------------------------------------------------------------------------------\n"
+                        f"Again, we thank you for helping keep our community a safe place."
+                    )
+                    await reporter.send(dm_summary)
+                except:
+                    await mod_channel.send(f"Could not DM {reporter.name} about the outcome.")
+
+
+            ####
 
             await mod_channel.send("Continue moderating more reports? (yes/no)")
             try:
