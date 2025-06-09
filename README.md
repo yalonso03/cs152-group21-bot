@@ -2,7 +2,9 @@
 
 ## SUBMISSION LINKS
 [Link to Demonstration Video](https://drive.google.com/file/d/1EE3kDqR0Ah_Sx9HYMLH6ufB9-nYrPnxU/view?usp=sharing)
+
 [Link to Poster PDF](https://drive.google.com/file/d/1A77Rpzyhc8lL5BV32NuVT1xI-awBQJiJ/view?usp=sharing)
+
 [Link to GitHub Repo](https://github.com/yalonso03/cs152-group21-bot)
 
 
