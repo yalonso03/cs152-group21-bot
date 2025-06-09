@@ -25,6 +25,7 @@ NEED_SUICIDE_HOTLINE = "need_suicide_hotline"
 NEED_911 = "need_911"
 NEED_MENTAL_HEALTH_HOTLINE = "need_mental_health_hotline"
 NEED_NONCON_PORNOGRAPHY_HOTLINE = "need_nonconsensual_pornography_hotline"
+NEED_FINANCIALLY_MOTIVATED_SEXTORTION_HELP = "need_financially_motivated_sextortion_help"
 
 
 LLM_PROMPT = """You are an assistant helping detect cases of sextortion on Discord. 
@@ -41,6 +42,7 @@ Please respond ONLY with a JSON object in the following format:
     "need_911": False,
     "need_mental_health_hotline": False,
     "need_nonconsensual_pornography_hotline" : False,
+    "need_financially_motivated_sextortion_help" : False
   }
 }
 
@@ -66,6 +68,10 @@ RESOURCES_DICT = {
     NEED_SUICIDE_HOTLINE : {
         "url" : "https://988lifeline.org/chat/",
         "text" : "Suicide Crisis Hotline"
+    },
+    NEED_FINANCIALLY_MOTIVATED_SEXTORTION_HELP : {
+        "url" : "https://www.fbi.gov/how-we-can-help-you/scams-and-safety/common-frauds-and-scams/sextortion/financially-motivated-sextortion",
+        "text" : "Reporting Financially Motivated Sextortion to the FBI"
     }
 
 }
@@ -131,7 +137,6 @@ class ModBot(discord.Client):
         self.SEXTORTION_PRIORITY = 1  # for reports that potentially have sextortion
         self.OTHER_PRIORITY = 2       # for reports that likely were not because of sextortion
         
-    #record blocker does not want to see the offender, aka adds to blocklists dict
 
     def process_message(self, message_string):
         """
@@ -206,16 +211,12 @@ class ModBot(discord.Client):
                 meta["offender"].mention if hasattr(meta["offender"], "mention")
                 else str(meta["offender"])
             )
-            # reporter_mention = meta["reporter"].mention if hasattr(meta["reporter"], "mention") else str(meta["reporter"])
-            # offender_mention = meta["offender"].mention if hasattr(meta["offender"], "mention") else str(meta["offender"])
+            
             await mod_channel.send(
                 f"New **AUTOMATED Queued report**\n"
                 f"Reporter: {reporter_mention} | Offender: {offender_mention}\n{meta['jump_url']}"
 )           
-            # await mod_channel.send(
-            #     f"New **AUTOMATED Queued report**\n"
-            #     f"Offender: {meta['offender']}\n{meta['jump_url']}"
-            # )
+            
 
         else:
             # If the category code that the user selected is one of the ones that we've flagged for likely being 
@@ -231,8 +232,7 @@ class ModBot(discord.Client):
             #get the mod channel from server
             mod_channel = self.mod_channels[guild_id]
             #sends a notification to the mod channel with the report's summary.
-            # reporter_mention = meta["reporter"].mention if hasattr(meta["reporter"], "mention") else str(meta["reporter"])
-            # offender_mention = meta["offender"].mention if hasattr(meta["offender"], "mention") else str(meta["offender"])
+        
             reporter_mention = (
                 meta["reporter"].mention if "reporter" in meta and hasattr(meta["reporter"], "mention")
                 else "Automated Bot"
@@ -246,16 +246,7 @@ class ModBot(discord.Client):
                 f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
                 f"Reporter: {reporter_mention} | Offender: {offender_mention}\n{meta['jump_url']}"
             )
-            # await mod_channel.send(
-            #     f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
-            #     f"Reporter: {reporter_mention} | Offender: {offender_mention}\n{meta['jump_url']}"
-            # )
-            # await mod_channel.send(
-            #     f"New **Queued report** {meta['category_code']} — {meta['label']}\n"
-            #     f"Reporter: {meta['reporter'].mention} | "
-            #     f"Offender: {meta['offender'].mention}\n{meta['jump_url']}"
-            # )
-    #! JOEL ADDED end 
+            
 
     async def on_ready(self):
         print(f'{self.user.name} has connected to Discord! It is these guilds:')
@@ -265,10 +256,6 @@ class ModBot(discord.Client):
 
         # Parse the group number out of the bot's name
         match = re.search(r'[gG]roup (\d+) [bB]ot', self.user.name)
-        # match = re.search('[gG]roup (\d+) [bB]ot', self.user.name)  JUST CHANGED THIS 6/4
-
-
-
 
         if match:
             self.group_num = match.group(1)
@@ -381,16 +368,11 @@ class ModBot(discord.Client):
 
             # Then provide the necessary resources
             resources_dict = evaluation_json["resources_needed"]
-            need_suicide_hotline = resources_dict[NEED_SUICIDE_HOTLINE]
-            need_911 = resources_dict[NEED_911]
-            need_mental_health_hotline = resources_dict[NEED_MENTAL_HEALTH_HOTLINE]
-            need_noncon_porn_hotline = resources_dict[NEED_NONCON_PORNOGRAPHY_HOTLINE]
-
-        
+    
             
             n_resources_needed = sum([1 if resources_dict[pot_resource] else 0 for pot_resource in resources_dict.keys()])
             if n_resources_needed > 0:  # if there's at least one resource that needs to be given
-                #!TODO SEND A MESSAGE BEING LIKE U MIGHT NEED RESOURCES.
+                # Send a message in the channel indicating that harm might be caused
                 await message.channel.send("**This message was flagged as likely causing harm. It will be reviewed by a moderator and dealt with ASAP. In the meantime, please feel free to reference the below resources.**")
                 for pot_resource in resources_dict.keys():
                     if resources_dict[pot_resource]:
@@ -433,11 +415,7 @@ class ModBot(discord.Client):
             return m.channel == mod_channel and m.author != self.user
         goto_end = False
         while self.report_queue:
-            #report_tup = self.report_queue.popleft()
             priority, time, report = heapq.heappop(self.report_queue)
-            #report = report_tup[1]  # added this cuz the report is now a tuple
-            #used for the summary at the end (to summarize the report that was just modded)
-            #reporter = report["reporter"]  replaced below vvvv
 
             reporter = report.get("reporter")  # could be None
             reporter_name = reporter.name if reporter and hasattr(reporter, "name") else "Automated Bot"
@@ -455,17 +433,10 @@ class ModBot(discord.Client):
                 f"Reason: {category_code} - {label}\n"
                 f"Message info: {message}\n"
             )
-            # report_summary = ( REPLACED ABOVE
-            #     f"Reviewing report by: {reporter.name}\n"
-            #     f"Against: {offender.name}\n"
-            #     f"Reason: {category_code} - {label}\n"
-            #     f"Message info: {message}\n"
-            # )
 
             moderator_notes = {
                 "offender": offender.name,
                 "reporter": reporter.name if reporter and hasattr(reporter, "name") else "Automated Bot",  # REPLACED
-                # "reporter": reporter.name,
                 "message_url": message,
                 "violates_guidelines": "no",
                 "reason": None,
@@ -536,10 +507,8 @@ class ModBot(discord.Client):
                             await mod_channel.send("The report has been sent to the authorities (simulated).")
                             moderator_notes["report_sent"] = True
                             try:
-                                #await offender.send(f"Your message has been taken down: {message}")
 
                                 # delete the message by getting the message object
-                                
                                 message_obj = await fetch_message_object_from_url(self, message)
                                 await message_obj.delete()
                                 await offender.send(f"Your message has been taken down: {message_obj.content}")
