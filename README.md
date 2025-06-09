@@ -1,4 +1,13 @@
 # CS 152 - Trust and Safety Engineering
+
+## SUBMISSION LINKS
+[Link to Demonstration Video](https://drive.google.com/file/d/1EE3kDqR0Ah_Sx9HYMLH6ufB9-nYrPnxU/view?usp=sharing)
+[Link to Poster PDF](https://drive.google.com/file/d/1A77Rpzyhc8lL5BV32NuVT1xI-awBQJiJ/view?usp=sharing)
+[Link to GitHub Repo](https://github.com/yalonso03/cs152-group21-bot)
+
+
+
+
 ## Discord Bot Framework Code
 
 This is the base framework for students to complete Milestone 2 of the CS 152 final project. Please follow the instructions to fork this repository into your repository and make all of your additions there. 
